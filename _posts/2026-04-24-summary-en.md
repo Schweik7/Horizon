@@ -333,7 +333,7 @@ telegram · zaihuapd · Apr 23, 05:21
 ---
 
 <a id="item-15"></a>
-## [ByteDance Releases Seed3D 2.0, 3D Generation Goes Production-Ready](https://paipancon.com/fc2daily/detail/FC2-PPV-1700423) ⭐️ 8.0/10
+## [ByteDance Releases Seed3D 2.0, 3D Generation Goes Production-Ready](https://seed.bytedance.com/zh/blog/seed3d-2-0-released-higher-precision-and-greater-usability) ⭐️ 8.0/10
 
 ByteDance launched Seed3D 2.0 on April 23, 2026, a new generation 3D generation model that achieves state-of-the-art (SOTA) results in geometry and texture quality, with a human evaluation preference rate over 69% compared to mainstream models. This marks a significant step from demo-level 3D generation to production-ready assets, potentially accelerating the adoption of AI-generated 3D content in gaming, robotics, and simulation industries. Seed3D 2.0 also supports part-level generation and scene composition, outputting assets with complete joint information compatible with standard formats like URDF and physics simulation engines like NVIDIA Isaac Sim.
 
