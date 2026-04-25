@@ -86,6 +86,7 @@
   "theme": "base",
   "themeVariables": {
     "fontFamily": "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+    "fontSize": "18px",
     "primaryTextColor": "#2d2a3e",
     "primaryBorderColor": "#e0dbd3",
     "lineColor": "#7c7891",
@@ -100,7 +101,7 @@ flowchart LR
     classDef process fill:#ffe8db,stroke:#e0652e,color:#2d2a3e,stroke-width:1.5px;
     classDef output fill:#f9d7e5,stroke:#be185d,color:#2d2a3e,stroke-width:1.5px;
 
-    config["⚙️ Config JSON<br/>信息源、阈值、模型、语言、推送方式"]
+    config["⚙️ 配置<br/>信息源、阈值、模型、输出方式"]
 
     subgraph sources["已配置的信息源"]
         rss["📡 RSS"]
@@ -110,18 +111,18 @@ flowchart LR
         github["🐙 GitHub"]
     end
 
-    fetch["📥 抓取新闻内容"]
+    fetch["📥 抓取"]
     dedup["🧹 新闻去重"]
     score["🤖 AI 打分与过滤"]
-    enrich["🔎 补充搜索背景与讨论"]
-    summary["📝 生成 Markdown 日报"]
+    enrich["🔎 内容丰富"]
+    summary["📝 总结生成"]
 
     subgraph outputs["输出形式"]
         direction TB
-        site["🌐 GitHub Pages"]
+        site["🌐 Pages"]
         email["📧 邮件"]
-        webhook["🔔 Webhook / 飞书"]
-        mcp["🧩 MCP / 本地文件"]
+        webhook["🔔 Webhook"]
+        mcp["🧩 MCP"]
     end
 
     config --> fetch
@@ -140,8 +141,6 @@ flowchart LR
     summary --> email
     summary --> webhook
     summary --> mcp
-
-    linkStyle 0,10,11,12 stroke:#b9b2c9,stroke-width:1px,stroke-dasharray:4 4;
 
     class config config
     class rss,hn,reddit,telegram,github source

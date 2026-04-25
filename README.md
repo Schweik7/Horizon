@@ -86,6 +86,7 @@ But Horizon is not just another summarizer. AI is great at reducing noise, but n
   "theme": "base",
   "themeVariables": {
     "fontFamily": "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+    "fontSize": "18px",
     "primaryTextColor": "#2d2a3e",
     "primaryBorderColor": "#e0dbd3",
     "lineColor": "#7c7891",
@@ -100,7 +101,7 @@ flowchart LR
     classDef process fill:#ffe8db,stroke:#e0652e,color:#2d2a3e,stroke-width:1.5px;
     classDef output fill:#f9d7e5,stroke:#be185d,color:#2d2a3e,stroke-width:1.5px;
 
-    config["⚙️ Config JSON<br/>sources, thresholds, models, languages, delivery"]
+    config["⚙️ Config<br/>sources, thresholds, models, outputs"]
 
     subgraph sources["Configured Sources"]
         rss["📡 RSS"]
@@ -110,18 +111,18 @@ flowchart LR
         github["🐙 GitHub"]
     end
 
-    fetch["📥 Fetch Source Items"]
-    dedup["🧹 Deduplicate Stories"]
+    fetch["📥 Fetch"]
+    dedup["🧹 Deduplicate"]
     score["🤖 AI Score & Filter"]
-    enrich["🔎 Enrich with Search + Discussion"]
-    summary["📝 Generate Markdown Summary"]
+    enrich["🔎 Enrich"]
+    summary["📝 Summarize"]
 
     subgraph outputs["Outputs"]
         direction TB
-        site["🌐 GitHub Pages"]
+        site["🌐 Pages"]
         email["📧 Email"]
-        webhook["🔔 Webhook / Feishu"]
-        mcp["🧩 MCP / Local Files"]
+        webhook["🔔 Webhooks"]
+        mcp["🧩 MCP"]
     end
 
     config --> fetch
@@ -140,8 +141,6 @@ flowchart LR
     summary --> email
     summary --> webhook
     summary --> mcp
-
-    linkStyle 0,10,11,12 stroke:#b9b2c9,stroke-width:1px,stroke-dasharray:4 4;
 
     class config config
     class rss,hn,reddit,telegram,github source
