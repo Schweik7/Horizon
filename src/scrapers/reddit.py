@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import httpx
 
@@ -14,7 +14,18 @@ from ..models import ContentItem, RedditConfig, RedditSubredditConfig, RedditUse
 logger = logging.getLogger(__name__)
 
 REDDIT_BASE = "https://www.reddit.com"
-USER_AGENT = "Horizon/1.0 (content aggregator; +https://github.com/thysrael/horizon)"
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/135.0.0.0 Safari/537.36"
+)
+REDDIT_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json,text/plain,*/*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": f"{REDDIT_BASE}/",
+}
+MAX_COMMENT_CONCURRENCY = 2
 
 
 class RedditScraper(BaseScraper):
@@ -23,6 +34,7 @@ class RedditScraper(BaseScraper):
     def __init__(self, config: RedditConfig, http_client: httpx.AsyncClient):
         super().__init__(config.model_dump(), http_client)
         self.reddit_config = config
+        self._comment_semaphore = asyncio.Semaphore(MAX_COMMENT_CONCURRENCY)
 
     async def fetch(self, since: datetime) -> List[ContentItem]:
         if not self.config.get("enabled", True):
@@ -126,7 +138,8 @@ class RedditScraper(BaseScraper):
         url = f"{REDDIT_BASE}/r/{subreddit}/comments/{post_id}.json"
         params = {"limit": fetch_limit, "depth": 1, "sort": "top", "raw_json": 1}
 
-        data = await self._reddit_get(url, params)
+        async with self._comment_semaphore:
+            data = await self._reddit_get(url, params)
         if not data or not isinstance(data, list) or len(data) < 2:
             return []
 
@@ -194,15 +207,27 @@ class RedditScraper(BaseScraper):
             },
         )
 
-    async def _reddit_get(self, url: str, params: dict) -> Optional[dict]:
-        headers = {"User-Agent": USER_AGENT}
+    async def _reddit_get(self, url: str, params: dict) -> Optional[Any]:
         try:
-            response = await self.client.get(url, params=params, headers=headers, follow_redirects=True)
+            response = await self.client.get(
+                url,
+                params=params,
+                headers=REDDIT_HEADERS,
+                follow_redirects=True,
+            )
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 5))
                 logger.warning("Reddit rate limited, retrying after %ds", retry_after)
                 await asyncio.sleep(retry_after)
-                response = await self.client.get(url, params=params, headers=headers, follow_redirects=True)
+                response = await self.client.get(
+                    url,
+                    params=params,
+                    headers=REDDIT_HEADERS,
+                    follow_redirects=True,
+                )
+            if response.status_code == 403 and "/comments/" in url:
+                logger.info("Reddit blocked comments request for %s; continuing without comments", url)
+                return None
             response.raise_for_status()
             return response.json()
         except httpx.HTTPError as e:
