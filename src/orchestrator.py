@@ -464,7 +464,8 @@ class HorizonOrchestrator:
         self.console.print("🤖 Analyzing content with AI...")
 
         ai_client = create_ai_client(self.config.ai)
-        analyzer = ContentAnalyzer(ai_client)
+        score_context = self.config.filtering.score_context if self.config.filtering else ""
+        analyzer = ContentAnalyzer(ai_client, score_context=score_context)
 
         return await analyzer.analyze_batch(items)
 

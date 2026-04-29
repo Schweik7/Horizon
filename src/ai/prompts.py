@@ -20,7 +20,7 @@ Respond with valid JSON only:
 
 If there are no duplicates at all, return: {{"duplicates": []}}"""
 
-CONTENT_ANALYSIS_SYSTEM = """You are an expert content curator helping filter important technical and academic information.
+_CONTENT_ANALYSIS_SYSTEM_BASE = """You are an expert content curator helping filter important technical and academic information.
 
 Score content on a 0-10 scale based on importance and relevance:
 
@@ -58,6 +58,16 @@ Consider:
 - Community discussion quality: insightful comments, diverse viewpoints, and debates increase value
 - Engagement signals: high upvotes/favorites with substantive discussion indicate community-validated importance
 """
+
+
+def build_content_analysis_system(score_context: str = "") -> str:
+    """Return the scoring system prompt, optionally extended with user-defined context."""
+    if score_context and score_context.strip():
+        return _CONTENT_ANALYSIS_SYSTEM_BASE + f"\nAdditional scoring instructions:\n{score_context.strip()}\n"
+    return _CONTENT_ANALYSIS_SYSTEM_BASE
+
+
+CONTENT_ANALYSIS_SYSTEM = _CONTENT_ANALYSIS_SYSTEM_BASE
 
 CONTENT_ANALYSIS_USER = """Analyze the following content and provide a JSON response with:
 - score (0-10): Importance score

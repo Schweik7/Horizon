@@ -8,7 +8,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, MofNCompleteColumn
 
 from .client import AIClient
-from .prompts import CONTENT_ANALYSIS_SYSTEM, CONTENT_ANALYSIS_USER
+from .prompts import build_content_analysis_system, CONTENT_ANALYSIS_USER
 from .utils import parse_json_response
 from ..models import ContentItem
 
@@ -18,8 +18,9 @@ DEFAULT_THROTTLE_SEC = 0.0
 class ContentAnalyzer:
     """Analyzes content items using AI to determine importance."""
 
-    def __init__(self, ai_client: AIClient):
+    def __init__(self, ai_client: AIClient, score_context: str = ""):
         self.client = ai_client
+        self.score_context = score_context
 
     @staticmethod
     def _parse_json_response(response: str) -> Optional[dict]:
@@ -35,9 +36,16 @@ class ContentAnalyzer:
         throttle_sec = getattr(config, "throttle_sec", DEFAULT_THROTTLE_SEC)
         return max(throttle_sec, 0.0)
 
+    def _get_concurrency(self) -> int:
+        """Return the configured max concurrent AI requests."""
+        config = getattr(self.client, "config", None)
+        return max(1, int(getattr(config, "concurrency", 5)))
+
     async def analyze_batch(self, items: List[ContentItem]) -> List[ContentItem]:
         throttle_sec = self._get_throttle_sec()
-        analyzed_items = []
+        concurrency = self._get_concurrency()
+        semaphore = asyncio.Semaphore(concurrency)
+        results: List[Optional[ContentItem]] = [None] * len(items)
 
         with Progress(
             SpinnerColumn(),
@@ -48,21 +56,23 @@ class ContentAnalyzer:
         ) as progress:
             task = progress.add_task("Analyzing", total=len(items))
 
-            for index, item in enumerate(items):
-                try:
-                    await self._analyze_item(item)
-                    analyzed_items.append(item)
-                except Exception as e:
-                    print(f"Error analyzing item {item.id}: {e}")
-                    item.ai_score = 0.0
-                    item.ai_reason = "Analysis failed"
-                    item.ai_summary = item.title
-                    analyzed_items.append(item)
-                progress.advance(task)
-                if throttle_sec > 0 and index < len(items) - 1:
-                    await asyncio.sleep(throttle_sec)
+            async def analyze_one(index: int, item: ContentItem) -> None:
+                async with semaphore:
+                    try:
+                        await self._analyze_item(item)
+                    except Exception as e:
+                        print(f"Error analyzing item {item.id}: {e}")
+                        item.ai_score = 0.0
+                        item.ai_reason = "Analysis failed"
+                        item.ai_summary = item.title
+                    results[index] = item
+                    progress.advance(task)
+                    if throttle_sec > 0:
+                        await asyncio.sleep(throttle_sec)
 
-        return analyzed_items
+            await asyncio.gather(*[analyze_one(i, item) for i, item in enumerate(items)])
+
+        return [r for r in results if r is not None]
 
     @retry(
         stop=stop_after_attempt(3),
@@ -128,9 +138,11 @@ class ContentAnalyzer:
             discussion_section=discussion_section
         )
 
+        system_prompt = build_content_analysis_system(self.score_context)
+
         # Get AI completion
         response = await self.client.complete(
-            system=CONTENT_ANALYSIS_SYSTEM,
+            system=system_prompt,
             user=user_prompt,
         )
 

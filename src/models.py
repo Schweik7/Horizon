@@ -55,6 +55,7 @@ class AIConfig(BaseModel):
     temperature: float = 0.3
     max_tokens: int = 4096
     throttle_sec: float = 0.0
+    concurrency: int = 5
     languages: List[str] = Field(default_factory=lambda: ["en"])
 
 
@@ -168,6 +169,7 @@ class FilteringConfig(BaseModel):
 
     ai_score_threshold: float = 7.0
     time_window_hours: int = 24
+    score_context: str = ""
 
 
 class Config(BaseModel):

@@ -74,6 +74,8 @@
 
 - **📡 关注你的信息源** — 将 Hacker News、RSS、Reddit、Telegram 和 GitHub Release / 用户动态纳入同一条 pipeline
 - **🤖 把噪声变成阅读清单** — 使用 Claude、GPT、Gemini、DeepSeek、豆包、MiniMax 或任意 OpenAI 兼容 API，为每条内容评分 0-10
+- **⚡ 并发 AI 分析** — 通过 `ai.concurrency` 配置并发数，用 `asyncio.gather` 并行打分，大幅缩短分析阶段耗时
+- **🎯 主题感知评分** — 通过 `filtering.score_context` 用自然语言告诉 AI 哪些主题应该加分、哪些应该降分，无需修改代码
 - **🔗 合并重复新闻** — 在生成日报前自动合并来自不同平台的相同故事
 - **🔍 补全背景知识** — 为陌生概念、公司、项目和技术术语补充网络搜索得到的背景解释
 - **💬 读到社区声音** — 收集并总结 Hacker News、Reddit 等来源的评论讨论
@@ -160,6 +162,129 @@ flowchart LR
 5. **丰富** — 为重要内容补充搜索得到的背景信息和社区讨论。
 6. **总结** — 生成结构化的 Markdown 日报，包含摘要、标签和参考链接。
 7. **分发** — 将结果发布到 GitHub Pages、邮件、飞书等 webhook、MCP 或本地文件。
+
+## 项目架构
+
+```
+Horizon/
+├── src/
+│   ├── main.py              # CLI 入口 — 解析参数、启动 orchestrator
+│   ├── orchestrator.py      # 流水线协调器 — 按顺序执行各阶段
+│   ├── models.py            # Pydantic 数据模型与配置 Schema
+│   ├── search.py            # DuckDuckGo 搜索（用于内容丰富阶段）
+│   ├── ai/
+│   │   ├── client.py        # AI 提供商抽象层（Anthropic / OpenAI / Gemini / …）
+│   │   ├── analyzer.py      # 并发 AI 打分（asyncio.Semaphore + gather）
+│   │   ├── enricher.py      # 两轮丰富：概念提取 → 搜索 → 结构化分析
+│   │   ├── summarizer.py    # 双语日报生成
+│   │   ├── prompts.py       # 所有 LLM Prompt（打分、去重、丰富、摘要）
+│   │   └── tokens.py        # 各提供商 Token 用量追踪
+│   ├── scrapers/
+│   │   ├── base.py          # BaseScraper 抽象基类
+│   │   ├── hackernews.py    # HN Firebase REST API
+│   │   ├── rss.py           # feedparser 解析任意 RSS/Atom
+│   │   ├── reddit.py        # Reddit 公开 JSON API（无需 Key）
+│   │   ├── telegram.py      # 公开频道 Web 预览抓取
+│   │   └── github.py        # GitHub REST API（用户动态 & Release）
+│   ├── services/
+│   │   ├── email.py         # SMTP/IMAP 自托管邮件列表
+│   │   └── webhook.py       # 飞书 / 钉钉 / Slack / Discord / 通用 Webhook
+│   ├── storage/
+│   │   └── manager.py       # 本地文件存储（日报 & 订阅者列表）
+│   ├── mcp/                 # MCP Server — 将流水线各步骤暴露为 AI 工具
+│   └── setup/               # 交互式向导 & 预置信息源库
+└── data/
+    ├── config.json          # 你的配置（信息源、AI 模型、过滤规则）
+    ├── config.example.json  # 带注释的参考配置
+    ├── presets.json         # 向导使用的精选信息源库
+    └── summaries/           # 生成的日报（Markdown）
+```
+
+数据流经流水线的过程：
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "ui-sans-serif, system-ui, sans-serif", "fontSize": "16px", "primaryTextColor": "#2d2a3e", "primaryBorderColor": "#e0dbd3", "lineColor": "#7c7891", "clusterBkg": "#f3f0eb"}}}%%
+flowchart TD
+    classDef mod fill:#ede7fb,stroke:#6d4aaa,color:#2d2a3e
+    classDef store fill:#fef9c3,stroke:#ca8a04,color:#2d2a3e
+    classDef out fill:#f9d7e5,stroke:#be185d,color:#2d2a3e
+
+    cfg["data/config.json"]
+    main["main.py\nCLI 入口"]
+    orch["orchestrator.py\n流水线协调器"]
+
+    subgraph scrapers["scrapers/"]
+        hn["hackernews.py"]
+        rss["rss.py"]
+        reddit["reddit.py"]
+        tg["telegram.py"]
+        gh["github.py"]
+    end
+
+    subgraph ai["ai/"]
+        analyzer["analyzer.py\n（并发打分）"]
+        enricher["enricher.py\n（概念→搜索→分析）"]
+        summarizer["summarizer.py\n（双语日报）"]
+        prompts["prompts.py\n（所有 Prompt）"]
+        client["client.py\n（提供商抽象）"]
+    end
+
+    search["search.py\n（DuckDuckGo）"]
+    storage["storage/manager.py"]
+
+    subgraph delivery["services/"]
+        email["email.py"]
+        webhook["webhook.py"]
+    end
+
+    cfg --> orch
+    main --> orch
+    orch --> scrapers
+    scrapers --> analyzer
+    analyzer --> enricher
+    enricher --> search
+    analyzer & enricher --> prompts
+    prompts --> client
+    enricher --> summarizer
+    summarizer --> storage
+    summarizer --> delivery
+
+    class hn,rss,reddit,tg,gh mod
+    class analyzer,enricher,summarizer,prompts,client mod
+    class storage store
+    class email,webhook out
+```
+
+## 爬取原理
+
+各信息源采用不同的访问策略——没有一种通用方案能适配所有平台。
+
+### Hacker News
+
+使用 **[Firebase REST API](https://hacker-news.firebaseio.com/v0/)**，完全公开，无需鉴权。
+
+1. `GET /topstories.json` → 获取最多 500 条热门故事 ID（按热度排序）
+2. 并发抓取前 N 条故事详情（`asyncio.gather`）
+3. 按 `min_score` 和时间窗口过滤
+4. 对符合条件的故事并发抓取前 K 条评论
+
+HN API 逐条返回，并发是保证性能的关键。
+
+### RSS / Atom
+
+使用 **[feedparser](https://feedparser.readthedocs.io/)** 解析任意 RSS/Atom 订阅源。URL 支持 `${VAR_NAME}` 环境变量替换，适用于需要在 URL 中嵌入 Token 的付费订阅源（如 LWN.net）。feedparser 自动处理编码差异，无需浏览器模拟。
+
+### Reddit
+
+使用 Reddit **公开 JSON API**（`reddit.com/r/{sub}/{sort}.json`），携带浏览器风格的 `User-Agent` Header，**无需 API Key 或 OAuth**。评论从 `/comments/{id}.json` 获取，通过 `asyncio.Semaphore(2)` 限速，避免触发频率限制。同时支持 Subreddit 帖子和用户动态抓取。
+
+### Telegram
+
+无需 API Token。Horizon 使用 `httpx` + `BeautifulSoup` 抓取 **`https://t.me/s/{channel}`** 的公开 Web 预览页面，解析最近约 30 条消息的文本、时间戳和链接。**仅支持公开频道**。
+
+### GitHub
+
+使用 **[GitHub REST API](https://docs.github.com/en/rest)**：`/users/{username}/events` 追踪用户动态，`/repos/{owner}/{repo}/releases` 追踪 Release。在 `.env` 中配置 `GITHUB_TOKEN` 可将未鉴权速率上限从 60 次/小时提升至 5000 次/小时。仅保留有意义的事件类型（Push、Create、Fork、Watch、PullRequest）。
 
 ## 快速开始
 
@@ -296,7 +421,7 @@ Horizon 已经支持完整的日报流程：多源抓取、AI 打分、去重、
 计划中的改进：
 
 - 更多信息源类型，例如 Twitter/X 和 Discord
-- 按信息源自定义打分 Prompt
+- 按信息源独立配置 `score_context`（当前为全局一份）
 - 在 GitHub 上发布 Release
 - 发布到 PyPI，支持通过 `pip install` 安装
 

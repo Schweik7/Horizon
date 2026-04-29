@@ -73,6 +73,8 @@ But Horizon is not just another summarizer. AI is great at reducing noise, but n
 
 - **📡 Watch Your Own Sources** — Track Hacker News, RSS, Reddit, Telegram, and GitHub releases or user activity in one pipeline
 - **🤖 Turn Noise Into a Reading List** — Score each item from 0-10 with Claude, GPT, Gemini, DeepSeek, Doubao, MiniMax, or any OpenAI-compatible API
+- **⚡ Concurrent AI Analysis** — Score all items in parallel with a configurable concurrency limit (`ai.concurrency`), dramatically cutting analysis time
+- **🎯 Topic-Aware Scoring** — Tell the scorer what to boost or suppress in plain language via `filtering.score_context` — no code changes required
 - **🔗 Merge Repeated Stories** — Deduplicate the same story across platforms before it reaches your briefing
 - **🔍 Understand the Background** — Add web-researched context for unfamiliar concepts, companies, projects, and technical terms
 - **💬 Read the Conversation** — Collect and summarize community comments from Hacker News, Reddit, and other supported sources
@@ -159,6 +161,129 @@ flowchart LR
 5. **Enrich** — Search the web for background context and collect community discussion for important items.
 6. **Summarize** — Generate a structured Markdown briefing with summaries, tags, and references.
 7. **Deliver** — Publish the result to GitHub Pages, email, webhooks such as Feishu, MCP, or local files.
+
+## Project Architecture
+
+```
+Horizon/
+├── src/
+│   ├── main.py              # CLI entrypoint — parses args, boots orchestrator
+│   ├── orchestrator.py      # Pipeline coordinator — runs all stages in order
+│   ├── models.py            # Pydantic data models & config schema
+│   ├── search.py            # DuckDuckGo web search used during enrichment
+│   ├── ai/
+│   │   ├── client.py        # AI provider abstraction (Anthropic / OpenAI / Gemini / …)
+│   │   ├── analyzer.py      # Concurrent AI scoring via asyncio.Semaphore + gather
+│   │   ├── enricher.py      # Two-pass enrichment: concept extraction → search → analysis
+│   │   ├── summarizer.py    # Bilingual daily briefing generation
+│   │   ├── prompts.py       # All LLM prompts (scoring, dedup, enrichment, summary)
+│   │   └── tokens.py        # Per-provider token usage tracking
+│   ├── scrapers/
+│   │   ├── base.py          # BaseScraper abstract class
+│   │   ├── hackernews.py    # HN via Firebase REST API
+│   │   ├── rss.py           # Any RSS / Atom feed via feedparser
+│   │   ├── reddit.py        # Reddit public JSON API (no key needed)
+│   │   ├── telegram.py      # Public channel web preview scraping
+│   │   └── github.py        # GitHub REST API — user events & repo releases
+│   ├── services/
+│   │   ├── email.py         # SMTP/IMAP self-hosted newsletter
+│   │   └── webhook.py       # Feishu / DingTalk / Slack / Discord / generic webhook
+│   ├── storage/
+│   │   └── manager.py       # File-based storage for summaries & subscriber lists
+│   ├── mcp/                 # MCP server — exposes pipeline steps as AI-callable tools
+│   └── setup/               # Interactive wizard & preset source library
+└── data/
+    ├── config.json          # Your configuration (sources, AI model, filtering)
+    ├── config.example.json  # Annotated reference config
+    ├── presets.json         # Curated source library used by the wizard
+    └── summaries/           # Generated daily briefings (Markdown)
+```
+
+The data flow through the pipeline:
+
+```mermaid
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "ui-sans-serif, system-ui, sans-serif", "fontSize": "16px", "primaryTextColor": "#2d2a3e", "primaryBorderColor": "#e0dbd3", "lineColor": "#7c7891", "clusterBkg": "#f3f0eb"}}}%%
+flowchart TD
+    classDef mod fill:#ede7fb,stroke:#6d4aaa,color:#2d2a3e
+    classDef store fill:#fef9c3,stroke:#ca8a04,color:#2d2a3e
+    classDef out fill:#f9d7e5,stroke:#be185d,color:#2d2a3e
+
+    cfg["data/config.json"]
+    main["main.py\nCLI entrypoint"]
+    orch["orchestrator.py\nPipeline coordinator"]
+
+    subgraph scrapers["scrapers/"]
+        hn["hackernews.py"]
+        rss["rss.py"]
+        reddit["reddit.py"]
+        tg["telegram.py"]
+        gh["github.py"]
+    end
+
+    subgraph ai["ai/"]
+        analyzer["analyzer.py\n(concurrent scoring)"]
+        enricher["enricher.py\n(concept → search → analysis)"]
+        summarizer["summarizer.py\n(bilingual briefing)"]
+        prompts["prompts.py\n(all LLM prompts)"]
+        client["client.py\n(provider abstraction)"]
+    end
+
+    search["search.py\n(DuckDuckGo)"]
+    storage["storage/manager.py"]
+
+    subgraph delivery["services/"]
+        email["email.py"]
+        webhook["webhook.py"]
+    end
+
+    cfg --> orch
+    main --> orch
+    orch --> scrapers
+    scrapers --> analyzer
+    analyzer --> enricher
+    enricher --> search
+    analyzer & enricher --> prompts
+    prompts --> client
+    enricher --> summarizer
+    summarizer --> storage
+    summarizer --> delivery
+
+    class hn,rss,reddit,tg,gh mod
+    class analyzer,enricher,summarizer,prompts,client mod
+    class storage store
+    class email,webhook out
+```
+
+## Scraping Principles
+
+Each source type uses a different access strategy — no single scraping approach fits all platforms.
+
+### Hacker News
+
+Uses the **[Firebase REST API](https://hacker-news.firebaseio.com/v0/)** — fully public, no authentication required.
+
+1. `GET /topstories.json` → ordered list of up to 500 top story IDs
+2. Fetch the top-N story details concurrently (`asyncio.gather`)
+3. Filter by `min_score` threshold and the configured time window
+4. Fetch the top-K comments for each qualifying story (also concurrent)
+
+Because the HN API is item-by-item, concurrency is essential for acceptable performance.
+
+### RSS / Atom
+
+Uses **[feedparser](https://feedparser.readthedocs.io/)** to parse any standard RSS or Atom feed URL. Feed URLs support `${VAR_NAME}` substitution from `.env` — useful for subscriber-only feeds that embed a secret token in the URL. No authentication headers or browser emulation is needed; feedparser handles encoding quirks automatically.
+
+### Reddit
+
+Uses Reddit's **public JSON API** (`reddit.com/r/{sub}/{sort}.json`) with a browser-style `User-Agent` header — no API key or OAuth required. Post comments are fetched from `/comments/{id}.json`. To avoid triggering rate limits, comment requests are serialized through an `asyncio.Semaphore(2)`.
+
+### Telegram
+
+No API token is needed. Horizon scrapes the **public web preview** at `https://t.me/s/{channel}` using `httpx` + `BeautifulSoup`. The page renders the last ~30 messages as plain HTML; Horizon parses message text, timestamps, and embedded links from the DOM. Only **public channels** are supported.
+
+### GitHub
+
+Uses the **[GitHub REST API](https://docs.github.com/en/rest)**: `/users/{username}/events` for user activity and `/repos/{owner}/{repo}/releases` for release tracking. An optional `GITHUB_TOKEN` in `.env` lifts the unauthenticated rate limit from 60 to 5 000 requests per hour. Only a curated subset of event types is kept (push, create, fork, watch, pull request).
 
 ## Quick Start
 
@@ -295,7 +420,7 @@ Horizon already supports the full daily briefing loop: multi-source collection, 
 Planned improvements:
 
 - More source types, such as Twitter/X and Discord
-- Custom scoring prompts per source
+- Custom `score_context` per source (currently one global context)
 - Publish releases on GitHub
 - Publish the package to PyPI for `pip install`
 
